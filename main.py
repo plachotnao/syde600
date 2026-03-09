@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
+import json
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="ED Nurse Dashboard",
@@ -29,72 +31,22 @@ st.markdown("""
         letter-spacing: -0.5px;
     }
 
-    [data-testid="metric-container"] {
-        background-color: #f8f9fa;
-        border: 2px solid var(--border-color);
-        border-radius: 12px;
-        padding: 20px !important;
-    }
-
-    [data-testid="metric-container"] > div:first-child {
-        font-size: 14px !important;
-        font-weight: 600 !important;
-        color: #666 !important;
-    }
-
-    [data-testid="metric-container"] > div:nth-child(2) {
-        font-size: 28px !important;
-        font-weight: 700 !important;
-        color: var(--text-dark) !important;
-    }
-
-    .status-badge {
-        display: inline-block;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-weight: 600;
-        font-size: 13px;
-    }
-
-    .status-critical {
-        background-color: var(--critical-bg);
-        color: white;
-    }
-
-    .status-high {
-        background-color: var(--high-bg);
-        color: white;
-    }
-
-    .status-watch {
-        background-color: var(--watch-bg);
-        color: white;
-    }
-
-    .status-stable {
-        background-color: var(--stable-bg);
-        color: white;
-    }
-
-    [data-testid="dataframe"] {
-        font-size: 14px !important;
-    }
-
-    .stDataFrame thead {
-        font-weight: 700 !important;
-        background-color: #f8f9fa !important;
-    }
-
+    /* Style for the Reset Filters button - Make it Gray */
     .stButton > button {
-        border-radius: 8px;
+        background-color: #6c757d;
+        color: white;
+        border-radius: 6px;
         font-weight: 600;
-        padding: 10px 20px !important;
+        padding: 8px 16px !important;
         border: none;
+        transition: all 0.2s ease-in-out;
     }
 
     .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        background-color: #5a6268;
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
 
     [data-testid="stSidebar"] {
@@ -106,39 +58,27 @@ st.markdown("""
         border: none;
         border-top: 2px solid var(--border-color);
     }
-
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-
-    .stTabs [role="tab"] {
-        padding: 12px 24px !important;
-        font-weight: 600;
-        border-radius: 8px 8px 0 0;
-    }
-
-    .stInfo, .stSuccess, .stWarning, .stError {
-        border-radius: 8px;
-        border-left: 6px solid;
-        padding: 16px !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
+
 def now_ts():
-    return pd.Timestamp.now(tz="UTC")
+    return pd.Timestamp.now(tz="America/Toronto")
+
 
 def clamp(x, a, b):
     return max(a, min(b, x))
+
 
 def get_patient_age_and_dob(age):
     today = pd.Timestamp.now()
     dob = today - pd.DateOffset(years=age)
     return dob.strftime("%Y-%m-%d")
 
+
 def get_waiting_time(waiting_since):
-    now = pd.Timestamp.now(tz="UTC")
-    start = pd.to_datetime(waiting_since)
+    now = pd.Timestamp.now(tz="America/Toronto")
+    start = pd.to_datetime(waiting_since).tz_convert("America/Toronto")
     delta = now - start
     minutes = max(0, int(delta.total_seconds() // 60))
     hours = minutes // 60
@@ -146,6 +86,7 @@ def get_waiting_time(waiting_since):
     if hours > 0:
         return f"{hours}h {mins}m"
     return f"{mins}m"
+
 
 def format_patient_name(name, age):
     last_names = [
@@ -159,6 +100,7 @@ def format_patient_name(name, age):
     idx = (age * 7) % len(last_names)
     return f"{name} {last_names[idx]}"
 
+
 def trend_symbol(trend):
     if trend >= 2:
         return "⬆⬆"
@@ -170,195 +112,6 @@ def trend_symbol(trend):
         return "⬇"
     return "⬇⬇"
 
-def risk_color(score):
-    if score >= 7:
-        return "#dc3545"
-    if score >= 4:
-        return "#fd7e14"
-    if score >= 2:
-        return "#0d6efd"
-    return "#198754"
-
-def show_patient_popup(patient_row):
-    full_name = format_patient_name(patient_row["Name"], int(patient_row["Age"]))
-    dob = get_patient_age_and_dob(int(patient_row["Age"]))
-    waiting_time = get_waiting_time(patient_row["WaitingSince"])
-
-    with st.container():
-        status = patient_row["Status"]
-        if "Critical" in status:
-            badge_class = "status-critical"
-        elif "High" in status:
-            badge_class = "status-high"
-        elif "Watch" in status:
-            badge_class = "status-watch"
-        else:
-            badge_class = "status-stable"
-
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.markdown(f"""
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:16px; border-bottom:2px solid #e9ecef;">
-                <div>
-                    <p style="font-size:22px; font-weight:700; margin:0;">{patient_row['StatusIcon']} {full_name}</p>
-                    <p style="font-size:14px; color:#666; font-weight:500; margin:4px 0 0 0;">ID: {patient_row['PatientID']}</p>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col2:
-            st.markdown(f"""
-            <div style="text-align:right;">
-                <span class="status-badge {badge_class}">{patient_row['Status']}</span>
-                <div style="margin-top:8px; font-size:13px; color:#666; font-weight:500;">
-                    Risk: {int(patient_row['RiskScore'])} {trend_symbol(int(patient_row['Trend']))}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("#### 👤 Patient Demographics")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Date of Birth</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{dob}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Age</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{int(patient_row['Age'])} years</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c3:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Waiting Time</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{waiting_time}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c4:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Last Update</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{pd.to_datetime(patient_row['LastUpdate']).strftime('%H:%M:%S')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("#### 🏥 Chief Complaint & Location")
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Chief Complaint</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{patient_row['Complaint']}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Location</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{patient_row['Location']}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c3:
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px;">
-                <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Triage Level</div>
-                <div style="font-size:16px; font-weight:600; color:#1a1a1a;">{patient_row['Triage']}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        avpu_status = patient_row["AVPU"]
-        avpu_desc = {"A": "Alert", "V": "Verbal", "P": "Pain", "U": "Unresponsive"}[avpu_status]
-        avpu_color = "#198754" if avpu_status == "A" else "#fd7e14" if avpu_status == "V" else "#dc3545"
-
-        st.markdown("#### 🧠 Consciousness Level")
-        st.markdown(f"""
-        <div style="padding:16px; background-color:#f8f9fa; border-radius:8px; border-left:4px solid {avpu_color};">
-            <div style="font-size:12px; color:#666; text-transform:uppercase; font-weight:600; margin-bottom:6px;">AVPU Score</div>
-            <div style="font-size:18px; font-weight:700; color:{avpu_color};">{avpu_status} - {avpu_desc}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("#### 🫀 Vital Signs")
-        vitals = [
-            ("HR", f"{int(patient_row['HR'])} bpm", 60, 100),
-            ("RR", f"{int(patient_row['RR'])} br/min", 12, 20),
-            ("SpO2", f"{int(patient_row['SpO2'])} %", 95, 100),
-            ("SBP", f"{int(patient_row['SBP'])} mmHg", 90, 120),
-            ("Temp", f"{float(patient_row['Temp']):.1f} °C", 36.5, 37.5),
-            ("AVPU", avpu_desc, None, None)
-        ]
-
-        cols_top = st.columns(3)
-        cols_bottom = st.columns(3)
-        all_cols = cols_top + cols_bottom
-
-        for i, (label, value, low, high) in enumerate(vitals):
-            abnormal = False
-            if low is not None and high is not None:
-                numeric = float(value.split()[0])
-                abnormal = numeric < low or numeric > high
-            border = "#dc3545" if abnormal else "#e9ecef"
-            bg = "rgba(220, 53, 69, 0.05)" if abnormal else "white"
-            color = "#dc3545" if abnormal else "#1a1a1a"
-            range_text = f"{low}-{high}" if low is not None else ""
-            with all_cols[i]:
-                st.markdown(f"""
-                <div style="padding:16px; background-color:{bg}; border:2px solid {border}; border-radius:8px; text-align:center;">
-                    <div style="font-size:12px; font-weight:600; color:#666; text-transform:uppercase; margin-bottom:8px;">{label}</div>
-                    <div style="font-size:20px; font-weight:700; color:{color}; margin-bottom:4px;">{value}</div>
-                    <div style="font-size:11px; color:#999;">{range_text}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        st.markdown("#### ⚠️ Risk Assessment")
-        risk_score = int(patient_row["RiskScore"])
-        trend = int(patient_row["Trend"])
-
-        def get_risk_text(score):
-            if score <= 0:
-                return "Stable - No significant concerns"
-            if score == 1:
-                return "Low Risk - Monitor"
-            if score in [2, 3]:
-                return "Watch - Close monitoring"
-            if score in [4, 5, 6]:
-                return "High - Urgent attention"
-            if score >= 7:
-                return "Critical - Emergency intervention"
-            return "Unknown"
-
-        trend_text = {
-            -2: "🟢 Significant Improvement",
-            -1: "🟢 Improving",
-            0: "🟡 Stable",
-            1: "🟠 Deteriorating",
-            2: "🔴 Rapid Deterioration"
-        }
-
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            color = risk_color(risk_score)
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px; border-left:4px solid {color};">
-                <div style="font-size:12px; color:#666; text-transform:uppercase; font-weight:600; margin-bottom:6px;">Risk Score</div>
-                <div style="font-size:28px; font-weight:700; color:{color}; margin-bottom:8px;">{risk_score}</div>
-                <div style="font-size:14px; color:#1a1a1a;">{get_risk_text(risk_score)}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with rc2:
-            trend_color = "#198754" if trend <= -1 else "#0d6efd" if trend == 0 else "#fd7e14" if trend == 1 else "#dc3545"
-            st.markdown(f"""
-            <div style="padding:16px; background-color:#f8f9fa; border-radius:8px; border-left:4px solid {trend_color};">
-                <div style="font-size:12px; color:#666; text-transform:uppercase; font-weight:600; margin-bottom:6px;">Trend</div>
-                <div style="font-size:20px; font-weight:700; color:{trend_color}; margin-bottom:8px;">{trend_text.get(trend, 'Unknown')}</div>
-                <div style="font-size:14px; color:#1a1a1a;">Score change: {'+' if trend > 0 else ''}{trend} points</div>
-            </div>
-            """, unsafe_allow_html=True)
 
 def compute_risk(row, prev_row=None):
     hr = row["HR"]
@@ -423,14 +176,6 @@ def compute_risk(row, prev_row=None):
 
     return int(clamp(score, 0, 10)), trend
 
-def status_from_score(score):
-    if score >= 7:
-        return "Critical", "🔴"
-    if score >= 4:
-        return "High", "🟠"
-    if score >= 2:
-        return "Watch", "🟡"
-    return "Stable", "🟢"
 
 def assign_statuses(df):
     scored = df.copy()
@@ -484,6 +229,7 @@ def assign_statuses(df):
 
     scored = scored.set_index("index").sort_index()
     return scored
+
 
 def make_initial_patients(n=40, seed=7):
     rng = np.random.default_rng(seed)
@@ -752,7 +498,7 @@ def make_initial_patients(n=40, seed=7):
         waiting_since = base_time - pd.Timedelta(minutes=waiting_minutes)
 
         rows.append({
-            "PatientID": f"P{i+1:03d}",
+            "PatientID": f"P{i + 1:03d}",
             "Name": rng.choice(first_names),
             "Age": age,
             "Triage": triage_value,
@@ -781,6 +527,7 @@ def make_initial_patients(n=40, seed=7):
 
     df = assign_statuses(df)
     return df
+
 
 def simulate_next(df, rng, deterioration_bias=0.22):
     out = df.copy()
@@ -882,6 +629,7 @@ def simulate_next(df, rng, deterioration_bias=0.22):
 
     return out
 
+
 def ensure_state():
     if "rng" not in st.session_state:
         st.session_state.rng = np.random.default_rng(13)
@@ -889,12 +637,7 @@ def ensure_state():
         st.session_state.patients = make_initial_patients(n=40, seed=7)
     if "prev_patients" not in st.session_state:
         st.session_state.prev_patients = st.session_state.patients.copy()
-    if "alerts" not in st.session_state:
-        st.session_state.alerts = []
-    if "ack" not in st.session_state:
-        st.session_state.ack = set()
-    if "selected_patient" not in st.session_state:
-        st.session_state.selected_patient = None
+
 
 def update_and_score(deterioration_bias):
     prev = st.session_state.patients.copy()
@@ -910,153 +653,9 @@ def update_and_score(deterioration_bias):
 
     scored = assign_statuses(scored)
 
-    new_alerts = []
-    for idx in scored.index:
-        pid = scored.loc[idx, "PatientID"]
-        score = int(scored.loc[idx, "RiskScore"])
-        trend = int(scored.loc[idx, "Trend"])
-        status = scored.loc[idx, "Status"]
-        if pid in st.session_state.ack:
-            continue
-        if status == "Critical":
-            new_alerts.append((pid, status, score, trend, "Critical risk score"))
-        elif trend >= 2:
-            new_alerts.append((pid, status, score, trend, "Rapid deterioration"))
-
-    ts = now_ts()
-    for pid, status, score, trend, reason in new_alerts:
-        st.session_state.alerts.insert(0, {
-            "Time": ts.isoformat(),
-            "PatientID": pid,
-            "Status": status,
-            "RiskScore": score,
-            "Trend": trend,
-            "Reason": reason
-        })
-
     st.session_state.prev_patients = prev
     st.session_state.patients = scored
 
-def build_patient_table(df):
-    table = df.copy()
-    table["TrendDisplay"] = table["Trend"].apply(lambda x: f"{trend_symbol(int(x))} ({int(x)})")
-    table["StatusDisplay"] = table.apply(lambda r: f"{r['StatusIcon']} {r['Status']}", axis=1)
-    table["WaitingTime"] = table["WaitingSince"].apply(get_waiting_time)
-    table["TempDisplay"] = table["Temp"].apply(lambda x: f"{float(x):.1f}")
-    table["HRDisplay"] = table["HR"].apply(lambda x: f"{int(x)}")
-    table["RRDisplay"] = table["RR"].apply(lambda x: f"{int(x)}")
-    table["SBPDisplay"] = table["SBP"].apply(lambda x: f"{int(x)}")
-    table["SpO2Display"] = table["SpO2"].apply(lambda x: f"{int(x)}%")
-
-    status_priority = {
-        "Critical": 0,
-        "High": 1,
-        "Watch": 2,
-        "Stable": 3
-    }
-
-    table["StatusPriority"] = table["Status"].map(status_priority)
-
-    table = table.sort_values(
-        ["StatusPriority", "RiskScore", "WaitingSince", "SpO2"],
-        ascending=[True, False, True, True]
-    )
-
-    return table[[
-        "PatientID", "Name", "Age", "Triage", "Location", "StatusDisplay",
-        "RiskScore", "TrendDisplay", "SpO2Display", "RRDisplay", "HRDisplay", "SBPDisplay",
-        "TempDisplay", "AVPU", "Complaint", "WaitingTime"
-    ]].rename(columns={
-        "StatusDisplay": "Status",
-        "TrendDisplay": "Trend",
-        "SpO2Display": "SpO2",
-        "RRDisplay": "RR",
-        "HRDisplay": "HR",
-        "SBPDisplay": "SBP",
-        "TempDisplay": "Temp"
-    })
-
-def style_patient_table(df):
-    def row_style(row):
-        status = str(row["Status"])
-
-        if "Critical" in status:
-            return ["background-color: rgba(220, 53, 69, 0.18); font-weight: 600;"] * len(row)
-        if "High" in status:
-            return ["background-color: rgba(255, 193, 7, 0.14); font-weight: 500;"] * len(row)
-        if "Watch" in status:
-            return ["background-color: rgba(13, 110, 253, 0.08);"] * len(row)
-        return [""] * len(row)
-
-    def col_style(col):
-        styles = []
-        for val in col:
-            text = str(val)
-
-            if col.name == "RiskScore":
-                score = int(val)
-                if score >= 7:
-                    styles.append("font-weight: 900; font-size: 20px; color: white; background-color: #dc3545; text-align: center;")
-                elif score >= 4:
-                    styles.append("font-weight: 900; font-size: 18px; color: white; background-color: #fd7e14; text-align: center;")
-                elif score >= 2:
-                    styles.append("font-weight: 800; font-size: 17px; color: white; background-color: #0d6efd; text-align: center;")
-                else:
-                    styles.append("font-weight: 800; font-size: 16px; color: white; background-color: #198754; text-align: center;")
-                continue
-
-            if col.name == "SpO2":
-                value = float(text.replace("%", ""))
-                if value < 95:
-                    styles.append("color: #dc3545; font-weight: 700;")
-                else:
-                    styles.append("")
-                continue
-
-            if col.name == "RR":
-                value = float(text)
-                if value < 12 or value > 20:
-                    styles.append("color: #dc3545; font-weight: 700;")
-                else:
-                    styles.append("")
-                continue
-
-            if col.name == "HR":
-                value = float(text)
-                if value < 60 or value > 100:
-                    styles.append("color: #dc3545; font-weight: 700;")
-                else:
-                    styles.append("")
-                continue
-
-            if col.name == "SBP":
-                value = float(text)
-                if value < 90 or value > 120:
-                    styles.append("color: #dc3545; font-weight: 700;")
-                else:
-                    styles.append("")
-                continue
-
-            if col.name == "Temp":
-                value = float(text)
-                if value < 36.5 or value > 37.5:
-                    styles.append("color: #dc3545; font-weight: 700;")
-                else:
-                    styles.append("")
-                continue
-
-            if col.name == "AVPU":
-                if text != "A":
-                    styles.append("color: #dc3545; font-weight: 700;")
-                else:
-                    styles.append("")
-                continue
-
-            styles.append("")
-
-        return styles
-
-    return df.style.apply(row_style, axis=1).apply(col_style, axis=0)
 
 ensure_state()
 
@@ -1120,20 +719,7 @@ with st.sidebar:
         st.session_state.reset_filters = True
         st.rerun()
 
-    st.divider()
-
-    st.markdown("### 📋 Alert Rules")
-    st.markdown("""
-    - **🔴 Critical**: RiskScore ≥ 7
-    - **🟠 High**: RiskScore ≥ 4
-    - **🟡 Watch**: RiskScore ≥ 2
-    - **🟢 Stable**: RiskScore < 2
-
-    Initial waiting time is randomized from 15 minutes to 6 hours
-    """)
-
 deterioration_bias = 0.22
-
 update_and_score(deterioration_bias)
 
 df = st.session_state.patients.copy()
@@ -1147,7 +733,7 @@ if q.strip():
         df["PatientID"].str.lower().str.contains(s)
         | df["Name"].str.lower().str.contains(s)
         | df["Complaint"].str.lower().str.contains(s)
-    ]
+        ]
 
 status_priority = {
     "Critical": 0,
@@ -1157,7 +743,6 @@ status_priority = {
 }
 
 df["StatusPriority"] = df["Status"].map(status_priority)
-
 df = df.sort_values(
     ["StatusPriority", "RiskScore", "WaitingSince", "SpO2"],
     ascending=[True, False, True, True]
@@ -1170,14 +755,12 @@ high = int(counts.get("High", 0))
 watch = int(counts.get("Watch", 0))
 stable = int(counts.get("Stable", 0))
 
-alerts_df = pd.DataFrame(st.session_state.alerts[:50])
-if not alerts_df.empty:
-    alerts_df = alerts_df[~alerts_df["PatientID"].isin(list(st.session_state.ack))]
-last_updated = pd.to_datetime(st.session_state.patients["LastUpdate"]).max().strftime("%H:%M:%S")
+last_updated = pd.to_datetime(st.session_state.patients["LastUpdate"]).dt.tz_convert("America/Toronto").max().strftime(
+    "%H:%M:%S")
 
 st.markdown(f"""
 <div style="background-color:#f8f9fa; border:2px solid #dee2e6; border-radius:10px; padding:12px 16px; margin-bottom:16px;">
-    <span style="font-size:13px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.4px;">Last Updated</span><br/>
+    <span style="font-size:13px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.4px;">Last Updated (EST)</span><br/>
     <span style="font-size:22px; font-weight:700; color:#1a1a1a;">{last_updated}</span>
 </div>
 """, unsafe_allow_html=True)
@@ -1187,96 +770,670 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown(f"""
-    <div style="background-color: rgba(220, 53, 69, 0.1); padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545; text-align: center;">
+    <div style="background-color: #fce8e8; padding: 20px; border-radius: 8px; border-top: 4px solid #dc3545; text-align: center;">
         <div style="font-size: 24px; font-weight: 700; color: #dc3545;">{crit}</div>
-        <div style="font-size: 12px; color: #666; margin-top: 4px;">Critical</div>
+        <div style="font-size: 14px; color: #dc3545; margin-top: 4px;">Critical</div>
     </div>
     """, unsafe_allow_html=True)
 
 with col2:
     st.markdown(f"""
-    <div style="background-color: rgba(255, 193, 7, 0.1); padding: 20px; border-radius: 8px; border-left: 4px solid #fd7e14; text-align: center;">
+    <div style="background-color: #fff8cc; padding: 20px; border-radius: 8px; border-top: 4px solid #fd7e14; text-align: center;">
         <div style="font-size: 24px; font-weight: 700; color: #fd7e14;">{high}</div>
-        <div style="font-size: 12px; color: #666; margin-top: 4px;">High Risk</div>
+        <div style="font-size: 14px; color: #fd7e14; margin-top: 4px;">High Risk</div>
     </div>
     """, unsafe_allow_html=True)
 
 with col3:
     st.markdown(f"""
-    <div style="background-color: rgba(13, 110, 253, 0.1); padding: 20px; border-radius: 8px; border-left: 4px solid #0d6efd; text-align: center;">
+    <div style="background-color: #e6f2ff; padding: 20px; border-radius: 8px; border-top: 4px solid #0d6efd; text-align: center;">
         <div style="font-size: 24px; font-weight: 700; color: #0d6efd;">{watch}</div>
-        <div style="font-size: 12px; color: #666; margin-top: 4px;">Watch</div>
+        <div style="font-size: 14px; color: #0d6efd; margin-top: 4px;">Watch</div>
     </div>
     """, unsafe_allow_html=True)
 
 with col4:
     st.markdown(f"""
-    <div style="background-color: rgba(25, 135, 84, 0.1); padding: 20px; border-radius: 8px; border-left: 4px solid #198754; text-align: center;">
+    <div style="background-color: #f1f8f1; padding: 20px; border-radius: 8px; border-top: 4px solid #198754; text-align: center;">
         <div style="font-size: 24px; font-weight: 700; color: #198754;">{stable}</div>
-        <div style="font-size: 12px; color: #666; margin-top: 4px;">Stable</div>
+        <div style="font-size: 14px; color: #198754; margin-top: 4px;">Stable</div>
     </div>
     """, unsafe_allow_html=True)
 
-tab_patients, tab_alerts = st.tabs(["Patients", "Alerts"])
+st.markdown("<br/>", unsafe_allow_html=True)
+st.markdown("### Patients in Waiting Area")
+st.caption(f"📋 Showing {len(df)} of {len(st.session_state.patients)} patients")
 
-with tab_patients:
-    st.markdown("### Patients in Waiting Area")
+# PREPARE DATA FOR UI INJECTION
+rows_data = []
+for _, row in df.iterrows():
+    status_str = str(row["Status"])
+    pid = str(row["PatientID"])
+    rs = int(row["RiskScore"])
 
-    st.caption(f"📋 Showing {len(df)} of {len(st.session_state.patients)} patients")
 
-    table = build_patient_table(df)
-    styled = style_patient_table(table)
-    st.dataframe(styled, use_container_width=True, height=520, hide_index=True)
+    def abn(val, lo, hi):
+        try:
+            return float(str(val).replace("%", "")) < lo or float(str(val).replace("%", "")) > hi
+        except:
+            return False
 
-    st.divider()
 
-with tab_alerts:
-    st.markdown("### Active Alerts & Notifications")
-    if alerts_df.empty:
-        st.success("✓ No unacknowledged alerts right now. Great job!")
-    else:
-        for idx, alert in alerts_df.iterrows():
-            pid = alert["PatientID"]
-            status = alert["Status"]
-            score = int(alert["RiskScore"])
-            reason = alert["Reason"]
-            time = pd.to_datetime(alert["Time"]).strftime("%H:%M:%S")
+    rows_data.append({
+        "pid": pid,
+        "status_short": status_str,
+        "risk": rs,
+        "trend": f"{trend_symbol(int(row['Trend']))} ({int(row['Trend'])})",
+        "name": str(row["Name"]),
+        "age": str(row["Age"]),
+        "triage": str(row["Triage"]),
+        "location": str(row["Location"]),
+        "complaint": str(row["Complaint"]),
+        "wait": get_waiting_time(row["WaitingSince"]),
+        "vitals": {
+            "hr": {"v": str(int(row["HR"])), "abn": abn(row["HR"], 60, 100)},
+            "rr": {"v": str(int(row["RR"])), "abn": abn(row["RR"], 12, 20)},
+            "spo2": {"v": f"{int(row['SpO2'])}%", "abn": abn(str(row["SpO2"]).replace("%", ""), 95, 100)},
+            "sbp": {"v": str(int(row["SBP"])), "abn": abn(row["SBP"], 90, 120)},
+            "temp": {"v": f"{float(row['Temp']):.1f}", "abn": abn(row["Temp"], 36.5, 37.5)},
+            "avpu": {"v": str(row["AVPU"]), "abn": str(row["AVPU"]) != "A"},
+        }
+    })
 
-            if score >= 7:
-                color = "#dc3545"
-                bg = "rgba(220, 53, 69, 0.1)"
-            elif score >= 4:
-                color = "#fd7e14"
-                bg = "rgba(255, 193, 7, 0.1)"
-            else:
-                color = "#0d6efd"
-                bg = "rgba(13, 110, 253, 0.1)"
+# Prepare Vitals Data for the Monitor
+patients_vitals = {}
+for _, prow in st.session_state.patients.iterrows():
+    pid = prow["PatientID"]
+    patients_vitals[pid] = {
+        "name": prow["Name"],
+        "age": int(prow["Age"]),
+        "hr": int(prow["HR"]),
+        "rr": int(prow["RR"]),
+        "spo2": int(prow["SpO2"]),
+        "sbp": int(prow["SBP"]),
+        "temp": float(prow["Temp"]),
+        "avpu": prow["AVPU"],
+        "status": prow["Status"],
+        "complaint": prow["Complaint"],
+    }
 
-            c1, c2, c3 = st.columns([3, 1, 1])
+# Safe serialization using data attributes to avoid ANY quote escaping issues
+vitals_attr = json.dumps(patients_vitals).replace("'", "&#39;")
+table_attr = json.dumps(rows_data).replace("'", "&#39;")
 
-            with c1:
-                st.markdown(f"""
-                <div style="background-color: {bg}; padding: 12px; border-radius: 8px; border-left: 4px solid {color};">
-                    <strong style="color: {color};">{pid}</strong> - {reason}<br/>
-                    <small style="color: #666;">{time} | Risk: {score}</small>
-                </div>
-                """, unsafe_allow_html=True)
+# Inject both sets of data safely into localStorage
+injector_html = f"""
+<div id="data-div" data-vitals='{vitals_attr}' data-table='{table_attr}'></div>
+<script>
+  try {{
+    const div = document.getElementById('data-div');
+    window.top.localStorage.setItem('ed_vitals_data', div.getAttribute('data-vitals'));
+    window.top.localStorage.setItem('ed_table_data', div.getAttribute('data-table'));
+  }} catch(e) {{
+    try {{
+      const div = document.getElementById('data-div');
+      localStorage.setItem('ed_vitals_data', div.getAttribute('data-vitals'));
+      localStorage.setItem('ed_table_data', div.getAttribute('data-table'));
+    }} catch(e2) {{}}
+  }}
+</script>"""
+components.html(injector_html, height=0, scrolling=False)
 
-            with c2:
-                if st.button("View", key=f"view_{pid}_{idx}", use_container_width=True):
-                    st.session_state.selected_patient = pid
-                    st.rerun()
+# STATIC HTML TABLE - This string NEVER changes, meaning Streamlit will never reload the iframe!
+TABLE_HTML = """
+<style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f8f9fa; font-size:14px; overflow:hidden;}
+    #wrap{height:520px; overflow-y:auto; overflow-x:auto; border-radius:8px; border:1px solid #e0e0e0; background:#fff;}
+    table{border-collapse:collapse; width:100%; min-width:1100px;}
+    thead tr{position:sticky; top:0; z-index:10;}
+    th{padding:12px; text-align:left; font-size:12px; font-weight:700; color:#555; border-bottom:2px solid #ddd; background:#f8f9fa; white-space:nowrap;}
+    tbody tr{transition:background 0.1s;}
+    tbody tr:hover{filter: brightness(0.96);}
+    td{padding:10px 12px; vertical-align:middle; white-space:nowrap; border-bottom:1px solid #eee; color:#1a1a1a;}
+    .vit-abn{color:#dc2626; font-weight:700;}
+    .mb{border-radius:6px; padding:6px 14px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid #0d6efd; background:#fff; color:#0d6efd; transition:all 0.12s;}
+    .mb:hover{background:#e6f2ff;}
+    .mb.on{background:#0d6efd; color:#fff;}
+</style>
 
-            with c3:
-                if st.button("✓ Ack", key=f"ack_{pid}_{idx}", use_container_width=True):
-                    st.session_state.ack.add(pid)
-                    st.rerun()
+<div id='wrap'><table>
+    <thead><tr>
+        <th>PatientID</th><th>Name</th><th>Age</th><th>Triage</th><th>Location</th><th>Status</th>
+        <th>RiskScore</th><th>Trend</th><th>SpO2</th><th>RR</th><th>HR</th><th>SBP</th>
+        <th>Temp</th><th>AVPU</th><th>LastUpdate</th><th>Complaint</th><th>Monitor</th>
+    </tr></thead>
+    <tbody id='tb'></tbody>
+</table></div>
 
-        st.divider()
-        if st.button("Acknowledge All Alerts", use_container_width=True):
-            for pid in alerts_df["PatientID"].unique():
-                st.session_state.ack.add(pid)
-            st.success("All alerts acknowledged!")
-            st.rerun()
+<script>
+    var LS = 'ed_selected_patient';
+    function getSel(){ try{ return localStorage.getItem(LS)||''; }catch(e){ return ''; } }
+    function setSel(p){ try{ localStorage.setItem(LS,p); }catch(e){} }
+    function clrSel(){ try{ localStorage.removeItem(LS); }catch(e){} }
+
+    window.toggleSel = function(pid) {
+        getSel() === pid ? clrSel() : setSel(pid);
+        renderFromData();
+    };
+
+    function vit(d){
+        return '<span class="'+(d.abn?'vit-abn':'')+'">'+d.v+'</span>';
+    }
+
+    function renderFromData() {
+        var raw = localStorage.getItem('ed_table_data');
+        if(!raw) return;
+        var rows = JSON.parse(raw);
+        var sel = getSel();
+        var html = '';
+
+        rows.forEach(function(r){
+            var isOn = sel === r.pid;
+            var bg = '#ffffff';
+            if(r.status_short === 'Critical') bg = '#fce8e8';
+            else if(r.status_short === 'High') bg = '#fff8cc';
+            else if(r.status_short === 'Watch') bg = '#e6f2ff';
+
+            html += '<tr style="background:'+bg+';">'
+                + '<td style="color:#555;">'+r.pid+'</td>'
+                + '<td style="font-weight:600;">'+r.name+'</td>'
+                + '<td>'+r.age+'</td>'
+                + '<td>'+r.triage+'</td>'
+                + '<td>'+r.location+'</td>'
+                + '<td style="font-weight:600;">'+(r.status_short === 'Critical' ? '🔴 Critical' : r.status_short === 'High' ? '🟠 High' : r.status_short === 'Watch' ? '🟡 Watch' : '🟢 Stable')+'</td>'
+                + '<td><strong>'+r.risk+'</strong></td>'
+                + '<td>'+r.trend+'</td>'
+                + '<td>'+vit(r.vitals.spo2)+'</td>'
+                + '<td>'+vit(r.vitals.rr)+'</td>'
+                + '<td>'+vit(r.vitals.hr)+'</td>'
+                + '<td>'+vit(r.vitals.sbp)+'</td>'
+                + '<td>'+vit(r.vitals.temp)+'</td>'
+                + '<td>'+vit(r.vitals.avpu)+'</td>'
+                + '<td>'+r.wait+'</td>'
+                + '<td>'+r.complaint+'</td>'
+                + '<td><button class="mb'+(isOn?' on':'')+'" onclick="toggleSel(\\''+r.pid+'\\')">'+(isOn?'👁 On':'Monitor')+'</button></td>'
+                + '</tr>';
+        });
+
+        document.getElementById('tb').innerHTML = html;
+    }
+
+    // Poll localStorage to update the table without iframe reload
+    setInterval(renderFromData, 500);
+    renderFromData();
+</script>
+"""
+components.html(TABLE_HTML, height=530, scrolling=False)
+
+# STATIC MONITOR HTML
+MONITOR_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+background: #000; overflow: hidden; width: 100%; height: 480px;
+font-family: Arial, Helvetica, sans-serif;
+}
+#no-selection {
+display: flex; align-items: center; justify-content: center;
+height: 480px; color: #333; font-size: 13px; letter-spacing: 2px;
+text-transform: uppercase; background: #000;
+}
+#monitor { display: none; width: 100%; height: 480px; flex-direction: row; background: #000; }
+#waveforms {
+flex: 1; display: flex; flex-direction: column;
+background: #000; border-right: 1px solid #1c1c1c;
+min-width: 0;
+}
+#top-bar {
+display: flex; align-items: center; gap: 18px;
+padding: 3px 10px; background: #000;
+border-bottom: 1px solid #111; flex-shrink: 0; height: 22px;
+}
+.top-tag { font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+
+.wave-row { flex: 1; position: relative; border-bottom: 1px solid #0d0d0d; min-height: 0; }
+.row-label {
+position: absolute; top: 4px; left: 8px; z-index: 2;
+font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+}
+canvas.wc { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
+#numerics { width: 230px; display: flex; flex-direction: column; background: #000; flex-shrink: 0; border-left: 1px solid #1a1a1a; }
+.nc {
+flex: 1; border-bottom: 1px solid #1a1a1a;
+padding: 5px 10px 4px 12px; position: relative;
+display: flex; flex-direction: column; justify-content: center; min-height: 0;
+}
+.nc-lbl  { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 1px; }
+.nc-unit { position: absolute; top: 5px; right: 8px; font-size: 9px; color: #444; letter-spacing: 0.5px; }
+.nc-big  { font-size: 64px; font-weight: 700; line-height: 0.9; letter-spacing: -3px; }
+.nc-sub  { font-size: 10px; margin-top: 3px; letter-spacing: 1px; }
+.nc-row2 { display: flex; align-items: stretch; height: 100%; }
+.nc-col  { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 2px 0; }
+.nc-col + .nc-col { border-left: 1px solid #1a1a1a; padding-left: 10px; }
+.nc-med  { font-size: 40px; font-weight: 700; line-height: 0.9; letter-spacing: -2px; }
+.nc-sm   { font-size: 22px; font-weight: 700; line-height: 1; }
+.nc-tiny { font-size: 9px; color: #444; letter-spacing: 0.5px; margin-top: 1px; }
+.nc-bp-row { display: flex; align-items: baseline; justify-content: space-between; }
+.nc-bp-val { font-size: 28px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; }
+.nc-bp-map { font-size: 24px; font-weight: 700; }
+.nc-bp-row2 { display: flex; align-items: baseline; justify-content: space-between; margin-top: 2px; }
+.nc-bp-val2 { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; color: #555; }
+.nc-bp-map2 { font-size: 18px; font-weight: 700; color: #555; }
+#spo2-bar { display: flex; flex-direction: column; gap: 2px; align-items: flex-end; margin-top: 2px; }
+#clock-bar {
+height: 22px; background: #000; border-top: 1px solid #1a1a1a;
+display: flex; align-items: center; justify-content: flex-end;
+padding: 0 10px; flex-shrink: 0;
+}
+#clock { font-size: 12px; color: #00ff41; font-family: monospace; letter-spacing: 1.5px; }
+</style>
+</head>
+<body>
+
+<div id="no-selection">NO PATIENT SELECTED</div>
+
+<div id="monitor">
+<div id="waveforms">
+<div id="top-bar">
+  <span class="top-tag" style="color:#00ff41;" id="tb-lead">II &nbsp; X1</span>
+  <span class="top-tag" style="color:#00ff41;" id="tb-mode">Diagnostic</span>
+  <span class="top-tag" style="color:#ccc;margin-left:16px;" id="tb-name">—</span>
+  <span class="top-tag" style="color:#aaa;" id="tb-info">—</span>
+  <span class="top-tag" style="color:#ffc107;" id="tb-complaint">—</span>
+</div>
+<div class="wave-row">
+  <div class="row-label" style="color:#00ff41;">ECG</div>
+  <canvas class="wc" id="c-ecg"></canvas>
+</div>
+<div class="wave-row">
+  <div class="row-label" style="color:#ffff00;">RESP</div>
+  <canvas class="wc" id="c-resp"></canvas>
+</div>
+<div class="wave-row">
+  <div class="row-label" style="color:#00e5ff;">Pleth</div>
+  <canvas class="wc" id="c-pleth"></canvas>
+</div>
+<div class="wave-row">
+  <div class="row-label" style="color:#ff40ff;">CO2</div>
+  <canvas class="wc" id="c-co2"></canvas>
+</div>
+<div class="wave-row">
+  <div class="row-label" style="color:#ff4444;">CH1:Art</div>
+  <canvas class="wc" id="c-art"></canvas>
+</div>
+</div>
+
+<div id="numerics">
+<div class="nc" style="flex:1.6;">
+  <div class="nc-lbl" style="color:#00ff41;">ECG &nbsp; bpm</div>
+  <div class="nc-big" style="color:#00ff41;" id="n-hr">--</div>
+  <div class="nc-sub" id="n-hr-sub" style="color:#555;"></div>
+</div>
+<div class="nc" style="flex:1.0; padding:0;">
+  <div class="nc-row2" style="height:100%;">
+    <div class="nc-col" style="padding:5px 0 4px 12px;">
+      <div class="nc-lbl" style="color:#ffff00;">RESP</div>
+      <div class="nc-med" style="color:#ffff00;" id="n-rr">--</div>
+    </div>
+    <div class="nc-col" style="padding:5px 0 4px 10px;">
+      <div class="nc-lbl" style="color:#aaaaaa;">TEMP</div>
+      <div class="nc-sm"  style="color:#aaaaaa;" id="n-temp">--</div>
+      <div class="nc-tiny">T1</div>
+      <div class="nc-tiny">T2</div>
+      <div class="nc-tiny">TD</div>
+    </div>
+  </div>
+</div>
+<div class="nc" style="flex:1.1;">
+  <div class="nc-lbl" style="color:#00e5ff;">SpO2</div>
+  <div class="nc-unit">%</div>
+  <div style="display:flex;align-items:flex-end;gap:10px;">
+    <div class="nc-big" style="color:#00e5ff;" id="n-spo2">--</div>
+    <div id="spo2-bar"></div>
+  </div>
+</div>
+<div class="nc" style="flex:1.1;">
+  <div class="nc-lbl" style="color:#ff40ff;">CO2</div>
+  <div class="nc-unit">mmHg</div>
+  <div class="nc-big" style="color:#ff40ff;" id="n-co2">--</div>
+</div>
+<div class="nc" style="flex:1.3;">
+  <div class="nc-lbl" style="color:#ff7043;">IBP (1,2)</div>
+  <div class="nc-unit">mmHg</div>
+  <div class="nc-bp-row">
+    <div class="nc-bp-val" style="color:#ff7043;" id="n-ibp">--/--</div>
+    <div class="nc-bp-map" style="color:#ff7043;" id="n-map">(--)</div>
+  </div>
+  <div class="nc-bp-row2">
+    <div class="nc-bp-val2">---/---</div>
+    <div class="nc-bp-map2">( 10 )</div>
+  </div>
+</div>
+<div class="nc" style="flex:1.3;">
+  <div class="nc-lbl" style="color:#fff;">NIBP</div>
+  <div class="nc-unit">mmHg</div>
+  <div class="nc-bp-row">
+    <div class="nc-bp-val" style="color:#fff;" id="n-nibp">--/--</div>
+    <div class="nc-bp-map" style="color:#fff;" id="n-nibp-map">(--)</div>
+  </div>
+  <div class="nc-sub" style="color:#555;">Manual</div>
+</div>
+<div id="clock-bar"><span id="clock">00:00:00</span></div>
+</div>
+</div>
+
+<script>
+const SEL_KEY    = 'ed_selected_patient';
+const VITALS_KEY = 'ed_vitals_data';
+const SWEEP      = 160;
+
+function buildEcgLut(hr, avpu) {
+const N = 1000, lut = new Float32Array(N);
+const aberrant = avpu !== 'A' || hr > 130 || hr < 45;
+const noise = () => (Math.random() - 0.5) * 0.01;
+for (let i = 0; i < N; i++) {
+const p = i / N; let v = noise();
+if (p < 0.18) v += 0.13 * Math.sin(Math.PI * p / 0.18);
+if (p >= 0.22 && p < 0.26) v -= 0.10 * Math.sin(Math.PI * (p-0.22)/0.04);
+if (p >= 0.26 && p < 0.36) {
+  const x = (p-0.26)/0.10;
+  v += aberrant ? 0.80 * Math.sin(Math.PI * Math.pow(x,0.5)) - 0.12*Math.sin(2*Math.PI*x)
+                : 1.00 * Math.pow(Math.sin(Math.PI * x), 1.6);
+}
+if (p >= 0.36 && p < 0.44) v -= 0.20 * Math.sin(Math.PI * (p-0.36)/0.08);
+if (p >= 0.52 && p < 0.78) {
+  const x = (p-0.52)/0.26;
+  v += (aberrant ? 0.28 : 0.22) * Math.sin(Math.PI * Math.pow(x, 0.7));
+}
+if (hr < 70 && p >= 0.80 && p < 0.92) v += 0.04 * Math.sin(Math.PI*(p-0.80)/0.12);
+lut[i] = v;
+}
+return lut;
+}
+
+function buildPlethLut(spo2) {
+const N = 1000, lut = new Float32Array(N);
+const amp = 0.15 + Math.pow(Math.max(0, spo2 - 80) / 20, 1.5) * 0.80;
+const noise = () => (Math.random() - 0.5) * 0.010;
+for (let i = 0; i < N; i++) {
+const p = i / N; let v = noise();
+if (p < 0.20)      v += amp * Math.pow(Math.sin(Math.PI * p / 0.20), 0.55);
+else if (p < 0.32) v += amp * (0.55*(1-(p-0.20)/0.12) + 0.09*Math.sin(Math.PI*(p-0.20)/0.06));
+else if (p < 0.72) v += amp * 0.42 * Math.exp(-(p-0.32)/0.40 * 3.2);
+lut[i] = v;
+}
+return lut;
+}
+
+function buildArtLut(sbp) {
+const N = 1000, lut = new Float32Array(N);
+const dbp = Math.round(sbp * 0.62);
+const pp  = sbp - dbp;
+const amp = Math.max(0.08, pp / 120) * 1.4;
+const baseline = -0.25 - (120 - Math.min(sbp, 120)) / 120 * 0.15;
+const noise = () => (Math.random()-0.5)*0.008;
+for (let i = 0; i < N; i++) {
+const p = i / N; let v = noise();
+if (p < 0.22)      v = baseline + amp * Math.pow(Math.sin(Math.PI * p / 0.22), 0.5);
+else if (p < 0.30) v = baseline + amp * (0.72 - (p-0.22)/0.08 * 0.28) + 0.04*Math.sin(Math.PI*(p-0.22)/0.04);
+else               v = baseline + amp * 0.60 * Math.exp(-(p-0.30)/0.70 * 2.8);
+lut[i] = v + noise();
+}
+return lut;
+}
+
+let respT = 0;
+function respSample(dt, rr) {
+respT += dt;
+const period = 60 / rr * (1 + 0.05*Math.sin(respT*0.28));
+const phase = (respT % period) / period;
+const amp = 0.55 + Math.max(0, (20 - rr)) / 20 * 0.35;
+let v = phase < 0.42 ? amp * Math.sin(Math.PI * phase / 0.42) : -amp * 0.35 * Math.sin(Math.PI * (phase-0.42) / 0.58);
+return v + (Math.random()-0.5)*0.015;
+}
+
+let co2T = 0;
+function co2Sample(dt, rr, etco2) {
+co2T += dt;
+const period = 60 / rr;
+const phase = (co2T % period) / period;
+const amp = etco2 / 50 * 0.9;
+let v = 0;
+if (phase < 0.08)      v = 0;               
+else if (phase < 0.20) v = amp * (phase-0.08)/0.12;  
+else if (phase < 0.52) v = amp * (1 + 0.06*Math.sin(Math.PI*(phase-0.20)/0.32)); 
+else if (phase < 0.60) v = amp * (1 - (phase-0.52)/0.08); 
+else                   v = 0;               
+return v + (Math.random()-0.5)*0.008;
+}
+
+class SweepRenderer {
+constructor(id, color, mid_frac) {
+this.el    = document.getElementById(id);
+this.color = color;
+this.mid   = mid_frac !== undefined ? mid_frac : 0.55;
+this.buf   = null;
+this.wp    = 0;
+this.blank = 16;
+this.ready = false;
+}
+init() {
+const c = this.el;
+c.width  = c.offsetWidth  || c.parentElement.offsetWidth  || 500;
+c.height = c.offsetHeight || c.parentElement.offsetHeight || 80;
+this.ctx = c.getContext('2d');
+this.buf = new Float32Array(c.width).fill(0);
+this.wp  = 0;
+this.ready = true;
+}
+push(v) {
+if (!this.ready) return;
+this.buf[this.wp % this.buf.length] = v;
+this.wp++;
+}
+flush() {
+if (this.buf) this.buf.fill(0);
+}
+draw() {
+if (!this.ready) return;
+const ctx = this.ctx;
+const W = this.el.width, H = this.el.height;
+const mid = H * this.mid, scale = H * 0.38;
+const wp  = this.wp % W;
+
+ctx.fillStyle = '#000';
+ctx.fillRect(0, 0, W, H);
+
+ctx.strokeStyle = '#111'; ctx.lineWidth = 0.5;
+for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+for (let y = 0; y < H; y += H / 4) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+ctx.strokeStyle = this.color; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+ctx.shadowColor = this.color; ctx.shadowBlur = 4;
+ctx.beginPath();
+
+let first = true;
+for (let dx = this.blank + 1; dx < W; dx++) {
+  const bx = (wp + dx) % W;
+  const x  = dx;
+  const y  = mid - this.buf[bx] * scale;
+  if (first) { ctx.moveTo(x, y); first = false; }
+  else       { ctx.lineTo(x, y); }
+}
+ctx.stroke(); ctx.shadowBlur = 0;
+ctx.fillStyle = '#000'; ctx.fillRect(0, 0, this.blank + 1, H);
+}
+}
+
+function renderSpo2Bar(spo2) {
+const el = document.getElementById('spo2-bar');
+if (!el) return;
+const total = 6;
+const filled = Math.round(Math.max(0, Math.min(1, (spo2 - 80) / 20)) * total);
+el.innerHTML = '';
+el.style.cssText = 'display:flex;flex-direction:column;gap:2px;align-items:flex-end;margin-bottom:6px;';
+for (let i = total - 1; i >= 0; i--) {
+const b = document.createElement('div');
+const w = 8 + i * 3;
+b.style.cssText = `width:${w}px;height:5px;background:${i < filled ? '#00e5ff' : '#1a1a1a'};border-radius:1px;`;
+el.appendChild(b);
+}
+}
+
+const ecgR   = new SweepRenderer('c-ecg',   '#00ff41', 0.55);
+const respR  = new SweepRenderer('c-resp',  '#ffff00', 0.50);
+const plethR = new SweepRenderer('c-pleth', '#00e5ff', 0.55);
+const co2R   = new SweepRenderer('c-co2',   '#ff40ff', 0.72);
+const artR   = new SweepRenderer('c-art',   '#ff4444', 0.55);
+
+let V = null, pid = null, animId = null, lastTs = null;
+let ecgLut = null, plethLut = null, artLut = null;
+let ecgPhase = 0, plethPhase = 0, artPhase = 0;
+let frameN = 0;
+
+function buildLuts(v) {
+ecgLut   = buildEcgLut(v.hr, v.avpu);
+plethLut = buildPlethLut(v.spo2);
+artLut   = buildArtLut(v.sbp);
+}
+
+function computeDerived(v) {
+const dbp  = Math.round(v.sbp * 0.62);
+const map  = Math.round(dbp + (v.sbp - dbp) / 3);
+const etco2 = Math.round(35 + (v.rr - 14) * 0.5);
+return { dbp, map, etco2 };
+}
+
+function updateNumerics(v) {
+const { dbp, map, etco2 } = computeDerived(v);
+const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+
+set('n-hr',       v.hr);
+set('n-rr',       v.rr);
+set('n-temp',     v.temp.toFixed(1) + '°');
+set('n-spo2',     v.spo2);
+set('n-co2',      etco2);
+set('n-ibp',      v.sbp + '/' + dbp);
+set('n-map',      '(' + map + ')');
+set('n-nibp',     v.sbp + '/' + dbp);
+set('n-nibp-map', '(' + map + ')');
+
+const hrSubEl = document.getElementById('n-hr-sub');
+if (hrSubEl) {
+hrSubEl.textContent = v.hr < 60 ? '▲ BRADYCARDIA' : v.hr > 100 ? '▲ TACHYCARDIA' : '';
+hrSubEl.style.color = '#888';
+}
+renderSpo2Bar(v.spo2);
+}
+
+setInterval(() => {
+const d = new Date();
+const el = document.getElementById('clock');
+if (el) el.textContent = [d.getHours(),d.getMinutes(),d.getSeconds()].map(x=>String(x).padStart(2,'0')).join(':');
+}, 500);
+
+function frame(ts) {
+if (!lastTs) lastTs = ts;
+const dt = Math.min((ts - lastTs) / 1000, 0.05);
+lastTs = ts;
+frameN++;
+
+if (V) {
+const steps = Math.max(1, Math.round(SWEEP * dt));
+const sd = dt / steps;
+
+for (let s = 0; s < steps; s++) {
+  const beatPeriod = 60 / V.hr * (1 + 0.025*Math.sin(respT*0.7));
+
+  ecgPhase += sd / beatPeriod; if (ecgPhase >= 1) ecgPhase -= 1;
+  ecgR.push(ecgLut[Math.floor(ecgPhase * ecgLut.length)]);
+
+  plethPhase += sd / beatPeriod; if (plethPhase >= 1) plethPhase -= 1;
+  plethR.push(plethLut[Math.floor(plethPhase * plethLut.length)]);
+
+  artPhase += sd / beatPeriod; if (artPhase >= 1) artPhase -= 1;
+  artR.push(artLut[Math.floor(artPhase * artLut.length)]);
+
+  respR.push(respSample(sd, V.rr));
+  const { etco2 } = computeDerived(V);
+  co2R.push(co2Sample(sd, V.rr, etco2));
+}
+
+ecgR.draw(); respR.draw(); plethR.draw(); co2R.draw(); artR.draw();
+}
+
+animId = requestAnimationFrame(frame);
+}
+
+let monitorsInitialized = false;
+
+function pidSeed(pidStr) {
+let h = 0;
+for (let i = 0; i < pidStr.length; i++) h = (Math.imul(31, h) + pidStr.charCodeAt(i)) | 0;
+return Math.abs(h) / 2147483647;
+}
+
+function startMonitor(newPid, v) {
+const isSwitch = monitorsInitialized && (pid !== newPid);
+pid = newPid; V = v;
+buildLuts(v);
+frameN = 0;
+
+document.getElementById('no-selection').style.display = 'none';
+document.getElementById('monitor').style.display = 'flex';
+document.getElementById('tb-name').textContent      = v.name + '  ·  ' + newPid;
+document.getElementById('tb-info').textContent      = 'Age ' + v.age + '  ·  ' + v.status + '  ·  AVPU: ' + v.avpu;
+document.getElementById('tb-complaint').textContent = v.complaint;
+updateNumerics(v);
+
+const seed = pidSeed(newPid);
+
+if (!monitorsInitialized) {
+setTimeout(() => {
+  [ecgR, respR, plethR, co2R, artR].forEach(r => r.init());
+  ecgPhase   = seed; plethPhase = (seed + 0.15) % 1; artPhase   = (seed + 0.05) % 1;
+  respT      = seed * 60; co2T       = (seed + 0.3) * 60;
+  monitorsInitialized = true;
+}, 80);
+} else if (isSwitch) {
+[ecgR, respR, plethR, co2R, artR].forEach(r => r.flush());
+ecgPhase   = seed; plethPhase = (seed + 0.15) % 1; artPhase   = (seed + 0.05) % 1;
+respT      = seed * 60; co2T       = (seed + 0.3) * 60;
+}
+}
+
+function stopMonitor() {
+V = null; pid = null;
+document.getElementById('no-selection').style.display = 'flex';
+document.getElementById('monitor').style.display = 'none';
+}
+
+function pollData() {
+const sel = localStorage.getItem(SEL_KEY);
+if (sel) {
+  try {
+    const db = JSON.parse(localStorage.getItem(VITALS_KEY)||'{}');
+    if (db[sel]) {
+        const nv = db[sel];
+        if (!V || pid !== sel || nv.hr !== V.hr || nv.spo2 !== V.spo2 || nv.sbp !== V.sbp) {
+            startMonitor(sel, nv);
+        }
+    }
+  } catch(e) {}
+} else if (pid) {
+  stopMonitor();
+}
+setTimeout(pollData, 500);
+}
+
+pollData();
+animId = requestAnimationFrame(frame);
+</script>
+</body>
+</html>"""
+components.html(MONITOR_HTML, height=480, scrolling=False)
 
 st_autorefresh(interval=refresh_sec * 1000, key="auto_refresh")
