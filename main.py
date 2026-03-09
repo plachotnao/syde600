@@ -892,7 +892,7 @@ TABLE_HTML = """
     tbody tr:hover{filter: brightness(0.96);}
     td{padding:10px 12px; vertical-align:middle; white-space:nowrap; border-bottom:1px solid #eee; color:#1a1a1a;}
     .vit-abn{color:#dc2626; font-weight:700;}
-    .mb{border-radius:6px; padding:6px 14px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid #0d6efd; background:#fff; color:#0d6efd; transition:all 0.12s;}
+    .mb{border-radius:6px; padding:4px 10px; font-size:16px; font-weight:600; cursor:pointer; border:1px solid #0d6efd; background:#fff; color:#0d6efd; transition:all 0.12s;}
     .mb:hover{background:#e6f2ff;}
     .mb.on{background:#0d6efd; color:#fff;}
 </style>
@@ -901,7 +901,7 @@ TABLE_HTML = """
     <thead><tr>
         <th>PatientID</th><th>Name</th><th>Age</th><th>Triage</th><th>Location</th><th>Status</th>
         <th>RiskScore</th><th>Trend</th><th>SpO2</th><th>RR</th><th>HR</th><th>SBP</th>
-        <th>Temp</th><th>AVPU</th><th>LastUpdate</th><th>Complaint</th><th>Monitor</th>
+        <th>Temp</th><th>AVPU</th><th>LastUpdate</th><th>Complaint</th><th style="text-align:center;">🖥️</th>
     </tr></thead>
     <tbody id='tb'></tbody>
 </table></div>
@@ -952,7 +952,7 @@ TABLE_HTML = """
                 + '<td>'+vit(r.vitals.avpu)+'</td>'
                 + '<td>'+r.wait+'</td>'
                 + '<td>'+r.complaint+'</td>'
-                + '<td><button class="mb'+(isOn?' on':'')+'" onclick="toggleSel(\\''+r.pid+'\\')">'+(isOn?'👁 On':'Monitor')+'</button></td>'
+                + '<td style="text-align:center;"><button class="mb'+(isOn?' on':'')+'" onclick="toggleSel(\\''+r.pid+'\\')" title="Monitor Patient">🖥️</button></td>'
                 + '</tr>';
         });
 
