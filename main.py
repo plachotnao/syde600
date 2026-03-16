@@ -31,7 +31,6 @@ st.markdown("""
         letter-spacing: -0.5px;
     }
 
-    /* Style for the Reset Filters button - Make it Gray */
     .stButton > button {
         background-color: #6c757d;
         color: white;
@@ -70,12 +69,6 @@ def clamp(x, a, b):
     return max(a, min(b, x))
 
 
-def get_patient_age_and_dob(age):
-    today = pd.Timestamp.now()
-    dob = today - pd.DateOffset(years=age)
-    return dob.strftime("%Y-%m-%d")
-
-
 def get_waiting_time(waiting_since):
     now = pd.Timestamp.now(tz="America/Toronto")
     start = pd.to_datetime(waiting_since).tz_convert("America/Toronto")
@@ -88,17 +81,67 @@ def get_waiting_time(waiting_since):
     return f"{mins}m"
 
 
-def format_patient_name(name, age):
-    last_names = [
-        "Smith", "Johnson", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Anderson", "Thomas", "Jackson",
-        "White", "Harris", "Martin", "Thompson", "Garcia", "Martinez", "Robinson", "Clark", "Rodriguez", "Lewis",
-        "Lee", "Walker", "Hall", "Allen", "Young", "King", "Wright", "Lopez", "Hill", "Scott",
-        "Green", "Adams", "Nelson", "Carter", "Mitchell", "Roberts", "Phillips", "Campbell", "Parker", "Evans",
-        "Edwards", "Collins", "Reeves", "Stewart", "Morris", "Rogers", "Morgan", "Peterson", "Cooper", "Reed",
-        "Bell", "Howard"
-    ]
-    idx = (age * 7) % len(last_names)
-    return f"{name} {last_names[idx]}"
+def get_elapsed_time(start_ts):
+    now = pd.Timestamp.now(tz="America/Toronto")
+    start = pd.to_datetime(start_ts).tz_convert("America/Toronto")
+    delta = now - start
+    minutes = max(0, int(delta.total_seconds() // 60))
+    hours = minutes // 60
+    mins = minutes % 60
+    if hours > 0:
+        return f"{hours}h {mins}m"
+    return f"{mins}m"
+
+
+def compute_risk_details(row):
+    hr = row["HR"]
+    spo2 = row["SpO2"]
+    rr = row["RR"]
+    sbp = row["SBP"]
+    temp = row["Temp"]
+    avpu = row["AVPU"]
+
+    details = []
+
+    if rr <= 8 or rr >= 25:
+        details.append(f"RR {rr}: +3")
+    elif rr >= 21:
+        details.append(f"RR {rr}: +2")
+    elif rr < 12:
+        details.append(f"RR {rr}: +1")
+
+    if spo2 <= 91:
+        details.append(f"SpO2 {spo2}%: +3")
+    elif spo2 <= 93:
+        details.append(f"SpO2 {spo2}%: +2")
+    elif spo2 <= 95:
+        details.append(f"SpO2 {spo2}%: +1")
+
+    if temp <= 35.0 or temp >= 39.1:
+        details.append(f"Temp {temp:.1f}: +2")
+    elif temp >= 38.1:
+        details.append(f"Temp {temp:.1f}: +1")
+
+    if sbp <= 90:
+        details.append(f"SBP {sbp}: +3")
+    elif sbp <= 100:
+        details.append(f"SBP {sbp}: +2")
+    elif sbp <= 110:
+        details.append(f"SBP {sbp}: +1")
+
+    if hr <= 40 or hr >= 131:
+        details.append(f"HR {hr}: +3")
+    elif hr >= 111:
+        details.append(f"HR {hr}: +2")
+    elif hr >= 91:
+        details.append(f"HR {hr}: +1")
+    elif hr <= 50:
+        details.append(f"HR {hr}: +1")
+
+    if avpu != "A":
+        details.append(f"AVPU {avpu}: +3")
+
+    return "\n".join(details) if details else "No abnormal vital thresholds triggered"
 
 
 def trend_symbol(trend):
@@ -188,14 +231,10 @@ def assign_statuses(df):
     total = len(scored)
 
     critical_candidates = scored["RiskScore"] >= 7
-    high_candidates = scored["RiskScore"] >= 4
-    watch_candidates = scored["RiskScore"] >= 2
 
     critical_n = min(3, int(critical_candidates.sum()))
-
     remaining_idx = scored.index[critical_n:]
     high_n = min(15, int((scored.loc[remaining_idx, "RiskScore"] >= 4).sum()))
-
     remaining_idx = scored.index[critical_n + high_n:]
     watch_n = min(15, int((scored.loc[remaining_idx, "RiskScore"] >= 2).sum()))
 
@@ -243,11 +282,13 @@ def make_initial_patients(n=40, seed=7):
         "Joshua", "Victoria", "Nathan", "Sofia", "Ryan", "Penelope", "Gabriel", "Riley", "Caleb", "Lucy"
     ]
 
-    complaints = [
-        "Chest pain", "Shortness of breath", "Abdominal pain", "Fever", "Headache",
-        "Fall injury", "Dizziness", "Weakness", "Allergic reaction", "Nausea/vomiting",
-        "Back pain", "Cough", "Palpitations", "Dehydration", "Migraine"
+    last_names = [
+        "Smith", "Johnson", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Anderson", "Thomas", "Jackson",
+        "White", "Harris", "Martin", "Thompson", "Garcia", "Martinez", "Robinson", "Clark", "Rodriguez", "Lewis",
+        "Lee", "Walker", "Hall", "Allen", "Young", "King", "Wright", "Lopez", "Hill", "Scott"
     ]
+
+    genders = ["Female", "Male"]
 
     triage = ["CTAS 2", "CTAS 3", "CTAS 4", "CTAS 5"]
     locations = ["Waiting A", "Waiting B", "Hallway", "Overflow", "Observation"]
@@ -313,6 +354,24 @@ def make_initial_patients(n=40, seed=7):
             "hr": (86, 10), "rr": (16, 2), "spo2": (98, 1), "sbp": (116, 14), "temp": (36.9, 0.3),
             "avpu": ["A"], "avpu_p": [1.0]
         }
+    }
+
+    complaint_weights = {
+        "Chest pain": 0.08,
+        "Shortness of breath": 0.08,
+        "Abdominal pain": 0.09,
+        "Fever": 0.07,
+        "Headache": 0.07,
+        "Fall injury": 0.07,
+        "Dizziness": 0.07,
+        "Weakness": 0.07,
+        "Allergic reaction": 0.05,
+        "Nausea/vomiting": 0.08,
+        "Back pain": 0.07,
+        "Cough": 0.06,
+        "Palpitations": 0.05,
+        "Dehydration": 0.05,
+        "Migraine": 0.04
     }
 
     def sample_from_profile(profile, severity_band):
@@ -442,29 +501,11 @@ def make_initial_patients(n=40, seed=7):
 
         return hr, rr, spo2, sbp, temp, avpu
 
-    rows = []
-    base_time = now_ts()
-
-    complaint_weights = {
-        "Chest pain": 0.08,
-        "Shortness of breath": 0.08,
-        "Abdominal pain": 0.09,
-        "Fever": 0.07,
-        "Headache": 0.07,
-        "Fall injury": 0.07,
-        "Dizziness": 0.07,
-        "Weakness": 0.07,
-        "Allergic reaction": 0.05,
-        "Nausea/vomiting": 0.08,
-        "Back pain": 0.07,
-        "Cough": 0.06,
-        "Palpitations": 0.05,
-        "Dehydration": 0.05,
-        "Migraine": 0.04
-    }
-
     complaint_list = list(complaint_weights.keys())
     complaint_probs = list(complaint_weights.values())
+
+    rows = []
+    base_time = now_ts()
 
     for i in range(n):
         age = int(clamp(rng.normal(49, 19), 18, 92))
@@ -496,10 +537,13 @@ def make_initial_patients(n=40, seed=7):
 
         waiting_minutes = int(rng.integers(15, 361))
         waiting_since = base_time - pd.Timedelta(minutes=waiting_minutes)
+        gender = rng.choice(genders)
+        last_reassessment = base_time - pd.Timedelta(minutes=int(rng.integers(5, 181)))
 
         rows.append({
             "PatientID": f"P{i + 1:03d}",
-            "Name": rng.choice(first_names),
+            "Name": f"{rng.choice(first_names)} {rng.choice(last_names)}",
+            "Gender": gender,
             "Age": age,
             "Triage": triage_value,
             "Location": rng.choice(locations, p=[0.36, 0.26, 0.16, 0.12, 0.10]),
@@ -511,6 +555,7 @@ def make_initial_patients(n=40, seed=7):
             "Temp": temp,
             "AVPU": avpu,
             "WaitingSince": waiting_since,
+            "LastReassessment": last_reassessment,
             "LastUpdate": base_time
         })
 
@@ -525,8 +570,7 @@ def make_initial_patients(n=40, seed=7):
         df.loc[idx, "RiskScore"] = score
         df.loc[idx, "Trend"] = trend
 
-    df = assign_statuses(df)
-    return df
+    return assign_statuses(df)
 
 
 def simulate_next(df, rng, deterioration_bias=0.22):
@@ -719,6 +763,14 @@ with st.sidebar:
         st.session_state.reset_filters = True
         st.rerun()
 
+    st.markdown("### 📋 Alert Rules")
+    st.markdown("""
+        - **🔴 Critical**: RiskScore ≥ 7
+        - **🟠 High**: RiskScore ≥ 4
+        - **🟡 Watch**: RiskScore ≥ 2
+        - **🟢 Stable**: RiskScore < 2
+        """)
+
 deterioration_bias = 0.22
 update_and_score(deterioration_bias)
 
@@ -733,7 +785,7 @@ if q.strip():
         df["PatientID"].str.lower().str.contains(s)
         | df["Name"].str.lower().str.contains(s)
         | df["Complaint"].str.lower().str.contains(s)
-        ]
+    ]
 
 status_priority = {
     "Critical": 0,
@@ -755,8 +807,7 @@ high = int(counts.get("High", 0))
 watch = int(counts.get("Watch", 0))
 stable = int(counts.get("Stable", 0))
 
-last_updated = pd.to_datetime(st.session_state.patients["LastUpdate"]).dt.tz_convert("America/Toronto").max().strftime(
-    "%H:%M:%S")
+last_updated = pd.to_datetime(st.session_state.patients["LastUpdate"]).dt.tz_convert("America/Toronto").max().strftime("%H:%M:%S")
 
 st.markdown(f"""
 <div style="background-color:#f8f9fa; border:2px solid #dee2e6; border-radius:10px; padding:12px 16px; margin-bottom:16px;">
@@ -804,32 +855,29 @@ st.markdown("<br/>", unsafe_allow_html=True)
 st.markdown("### Patients in Waiting Area")
 st.caption(f"📋 Showing {len(df)} of {len(st.session_state.patients)} patients")
 
-# PREPARE DATA FOR UI INJECTION
 rows_data = []
+
 for _, row in df.iterrows():
-    status_str = str(row["Status"])
-    pid = str(row["PatientID"])
-    rs = int(row["RiskScore"])
-
-
     def abn(val, lo, hi):
         try:
             return float(str(val).replace("%", "")) < lo or float(str(val).replace("%", "")) > hi
-        except:
+        except Exception:
             return False
 
-
     rows_data.append({
-        "pid": pid,
-        "status_short": status_str,
-        "risk": rs,
+        "pid": str(row["PatientID"]),
+        "status_short": str(row["Status"]),
+        "risk": int(row["RiskScore"]),
+        "risk_info": compute_risk_details(row.to_dict()),
         "trend": f"{trend_symbol(int(row['Trend']))} ({int(row['Trend'])})",
         "name": str(row["Name"]),
+        "gender": str(row["Gender"]),
         "age": str(row["Age"]),
         "triage": str(row["Triage"]),
         "location": str(row["Location"]),
         "complaint": str(row["Complaint"]),
         "wait": get_waiting_time(row["WaitingSince"]),
+        "trs": get_elapsed_time(row["LastReassessment"]),
         "vitals": {
             "hr": {"v": str(int(row["HR"])), "abn": abn(row["HR"], 60, 100)},
             "rr": {"v": str(int(row["RR"])), "abn": abn(row["RR"], 12, 20)},
@@ -840,7 +888,6 @@ for _, row in df.iterrows():
         }
     })
 
-# Prepare Vitals Data for the Monitor
 patients_vitals = {}
 for _, prow in st.session_state.patients.iterrows():
     pid = prow["PatientID"]
@@ -857,11 +904,9 @@ for _, prow in st.session_state.patients.iterrows():
         "complaint": prow["Complaint"],
     }
 
-# Safe serialization using data attributes to avoid ANY quote escaping issues
 vitals_attr = json.dumps(patients_vitals).replace("'", "&#39;")
 table_attr = json.dumps(rows_data).replace("'", "&#39;")
 
-# Inject both sets of data safely into localStorage
 injector_html = f"""
 <div id="data-div" data-vitals='{vitals_attr}' data-table='{table_attr}'></div>
 <script>
@@ -876,41 +921,184 @@ injector_html = f"""
       localStorage.setItem('ed_table_data', div.getAttribute('data-table'));
     }} catch(e2) {{}}
   }}
-</script>"""
+</script>
+"""
 components.html(injector_html, height=0, scrolling=False)
 
-# STATIC HTML TABLE - This string NEVER changes, meaning Streamlit will never reload the iframe!
 TABLE_HTML = """
 <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f8f9fa; font-size:14px; overflow:hidden;}
-    #wrap{height:520px; overflow-y:auto; overflow-x:auto; border-radius:8px; border:1px solid #e0e0e0; background:#fff;}
-    table{border-collapse:collapse; width:100%; min-width:1100px;}
-    thead tr{position:sticky; top:0; z-index:10;}
-    th{padding:12px; text-align:left; font-size:12px; font-weight:700; color:#555; border-bottom:2px solid #ddd; background:#f8f9fa; white-space:nowrap;}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8f9fa;font-size:14px;overflow:hidden;}
+    #wrap{
+        height:520px;
+        overflow-y:auto;
+        overflow-x:auto;
+        border-radius:8px;
+        border:1px solid #e0e0e0;
+        background:#fff;
+        position:relative;
+    }
+    table{
+        border-collapse:separate;
+        border-spacing:0;
+        width:100%;
+        min-width:1280px;
+    }
+    thead tr{
+        position:sticky;
+        top:0;
+        z-index:20;
+    }
+    th{
+        padding:12px;
+        text-align:left;
+        font-size:12px;
+        font-weight:700;
+        color:#555;
+        border-bottom:2px solid #ddd;
+        background:#f8f9fa;
+        white-space:nowrap;
+    }
+    td{
+        padding:10px 12px;
+        vertical-align:middle;
+        white-space:nowrap;
+        border-bottom:1px solid #eee;
+        color:#1a1a1a;
+    }
     tbody tr{transition:background 0.1s;}
-    tbody tr:hover{filter: brightness(0.96);}
-    td{padding:10px 12px; vertical-align:middle; white-space:nowrap; border-bottom:1px solid #eee; color:#1a1a1a;}
-    .vit-abn{color:#dc2626; font-weight:700;}
-    .mb{border-radius:6px; padding:4px 10px; font-size:16px; font-weight:600; cursor:pointer; border:1px solid #0d6efd; background:#fff; color:#0d6efd; transition:all 0.12s;}
+    tbody tr:hover{filter:brightness(0.96);}
+    .vit-abn{color:#dc2626;font-weight:700;}
+    .mb{
+        border-radius:6px;
+        padding:4px 10px;
+        font-size:16px;
+        font-weight:600;
+        cursor:pointer;
+        border:1px solid #0d6efd;
+        background:#fff;
+        color:#0d6efd;
+        transition:all 0.12s;
+    }
     .mb:hover{background:#e6f2ff;}
-    .mb.on{background:#0d6efd; color:#fff;}
+    .mb.on{background:#0d6efd;color:#fff;}
+    .risk-wrap{
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+    }
+    .ib{
+        width:18px;
+        height:18px;
+        border-radius:50%;
+        border:1px solid #6c757d;
+        background:#fff;
+        color:#6c757d;
+        font-size:11px;
+        font-weight:700;
+        line-height:16px;
+        text-align:center;
+        cursor:pointer;
+        padding:0;
+        flex:0 0 auto;
+    }
+    .ib:hover{background:#f1f3f5;}
+    #risk-tip{
+        display:none;
+        position:fixed;
+        z-index:999999;
+        width:280px;
+        max-width:min(280px, calc(100vw - 24px));
+        background:#ffffff;
+        border:1px solid #9fb3c3;
+        border-radius:2px;
+        box-shadow:0 6px 18px rgba(0,0,0,0.18);
+        padding:12px 14px;
+        color:#1f2328;
+        --arrow-top: 24px;
+    }
+    #risk-tip.show{display:block;}
+    #risk-tip-title{
+        font-size:14px;
+        font-weight:700;
+        margin-bottom:8px;
+        line-height:1.2;
+    }
+    #risk-tip-body{
+        font-size:12px;
+        line-height:1.45;
+        white-space:pre-line;
+        word-break:break-word;
+    }
+    #risk-tip.tip-right::before,
+    #risk-tip.tip-right::after,
+    #risk-tip.tip-left::before,
+    #risk-tip.tip-left::after{
+        content:"";
+        position:absolute;
+        top:var(--arrow-top);
+        width:0;
+        height:0;
+        transform:translateY(-50%);
+    }
+    #risk-tip.tip-right::before{
+        left:-12px;
+        border-top:10px solid transparent;
+        border-bottom:10px solid transparent;
+        border-right:12px solid #9fb3c3;
+    }
+    #risk-tip.tip-right::after{
+        left:-10px;
+        border-top:9px solid transparent;
+        border-bottom:9px solid transparent;
+        border-right:11px solid #ffffff;
+    }
+    #risk-tip.tip-left::before{
+        right:-12px;
+        border-top:10px solid transparent;
+        border-bottom:10px solid transparent;
+        border-left:12px solid #9fb3c3;
+    }
+    #risk-tip.tip-left::after{
+        right:-10px;
+        border-top:9px solid transparent;
+        border-bottom:9px solid transparent;
+        border-left:11px solid #ffffff;
+    }
 </style>
 
-<div id='wrap'><table>
-    <thead><tr>
-        <th>PatientID</th><th>Name</th><th>Age</th><th>Triage</th><th>Location</th><th>Status</th>
-        <th>RiskScore</th><th>Trend</th><th>SpO2</th><th>RR</th><th>HR</th><th>SBP</th>
-        <th>Temp</th><th>AVPU</th><th>LastUpdate</th><th>Complaint</th><th style="text-align:center;">🖥️</th>
-    </tr></thead>
-    <tbody id='tb'></tbody>
-</table></div>
+<div id='wrap'>
+    <table>
+        <thead>
+            <tr>
+                <th>PatientID</th><th>Name</th><th>Gender</th><th>Age</th><th>Triage</th><th>Location</th><th>Status</th>
+                <th>RiskScore</th><th>Trend</th><th>SpO2</th><th>RR</th><th>HR</th><th>SBP</th>
+                <th>Temp</th><th>AVPU</th><th>LOS</th><th>TRS</th><th>Complaint</th><th style="text-align:center;">🖥️</th>
+            </tr>
+        </thead>
+        <tbody id='tb'></tbody>
+    </table>
+</div>
+
+<div id="risk-tip" role="dialog" aria-live="polite" aria-hidden="true">
+    <div id="risk-tip-title">Risk score details</div>
+    <div id="risk-tip-body"></div>
+</div>
 
 <script>
     var LS = 'ed_selected_patient';
+    var OPEN_TIP_KEY = 'ed_open_risk_tip';
+    var wrapEl = document.getElementById('wrap');
+    var tipEl = document.getElementById('risk-tip');
+    var tipBodyEl = document.getElementById('risk-tip-body');
+
     function getSel(){ try{ return localStorage.getItem(LS)||''; }catch(e){ return ''; } }
     function setSel(p){ try{ localStorage.setItem(LS,p); }catch(e){} }
     function clrSel(){ try{ localStorage.removeItem(LS); }catch(e){} }
+
+    function getOpenTip(){ try{ return localStorage.getItem(OPEN_TIP_KEY)||''; }catch(e){ return ''; } }
+    function setOpenTip(id){ try{ localStorage.setItem(OPEN_TIP_KEY,id); }catch(e){} }
+    function clearOpenTip(){ try{ localStorage.removeItem(OPEN_TIP_KEY); }catch(e){} }
 
     window.toggleSel = function(pid) {
         getSel() === pid ? clrSel() : setSel(pid);
@@ -921,7 +1109,153 @@ TABLE_HTML = """
         return '<span class="'+(d.abn?'vit-abn':'')+'">'+d.v+'</span>';
     }
 
+    function esc(s){
+        return String(s)
+            .replace(/&/g,'&amp;')
+            .replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;')
+            .replace(/'/g,'&#39;');
+    }
+
+    function clampValue(val, min, max){
+        return Math.max(min, Math.min(max, val));
+    }
+
+    function isButtonVisibleInWrap(btn){
+        if(!btn || !wrapEl) return false;
+        var btnRect = btn.getBoundingClientRect();
+        var wrapRect = wrapEl.getBoundingClientRect();
+        var verticallyVisible = btnRect.bottom > wrapRect.top && btnRect.top < wrapRect.bottom;
+        var horizontallyVisible = btnRect.right > wrapRect.left && btnRect.left < wrapRect.right;
+        return verticallyVisible && horizontallyVisible;
+    }
+
+    function hideTip(){
+        tipEl.classList.remove('show', 'tip-right', 'tip-left');
+        tipEl.setAttribute('aria-hidden', 'true');
+        tipEl.style.left = '-9999px';
+        tipEl.style.top = '-9999px';
+    }
+
+    function positionTipForButton(btn){
+        if(!btn) return false;
+        if(!isButtonVisibleInWrap(btn)) return false;
+
+        var rect = btn.getBoundingClientRect();
+
+        tipEl.classList.add('show');
+        tipEl.setAttribute('aria-hidden', 'false');
+        tipEl.style.left = '-9999px';
+        tipEl.style.top = '-9999px';
+        tipEl.classList.remove('tip-right', 'tip-left');
+
+        var tipRect = tipEl.getBoundingClientRect();
+        var gap = 14;
+        var arrowPad = 12;
+        var placement = 'right';
+
+        var left = rect.right + gap + arrowPad;
+        if (left + tipRect.width > window.innerWidth - 12) {
+            left = rect.left - tipRect.width - gap - arrowPad;
+            placement = 'left';
+        }
+
+        if (left < 12) {
+            if (rect.right + gap + arrowPad + tipRect.width <= window.innerWidth - 12) {
+                left = rect.right + gap + arrowPad;
+                placement = 'right';
+            } else {
+                left = 12;
+            }
+        }
+
+        if (left + tipRect.width > window.innerWidth - 12) {
+            left = window.innerWidth - tipRect.width - 12;
+        }
+
+        var top = rect.top + (rect.height / 2) - (tipRect.height / 2);
+        if (top < 12) top = 12;
+        if (top + tipRect.height > window.innerHeight - 12) {
+            top = window.innerHeight - tipRect.height - 12;
+        }
+
+        tipEl.classList.add(placement === 'right' ? 'tip-right' : 'tip-left');
+        tipEl.style.left = left + 'px';
+        tipEl.style.top = top + 'px';
+
+        var tipFinalRect = tipEl.getBoundingClientRect();
+        var buttonCenterY = rect.top + rect.height / 2;
+        var arrowTop = buttonCenterY - tipFinalRect.top;
+        arrowTop = clampValue(arrowTop, 18, tipFinalRect.height - 18);
+        tipEl.style.setProperty('--arrow-top', arrowTop + 'px');
+
+        return true;
+    }
+
+    function syncOpenTip(){
+        var openTip = getOpenTip();
+        if(!openTip){
+            hideTip();
+            return;
+        }
+
+        var btn = document.querySelector('[data-tip-id="'+openTip+'"]');
+        if(!btn){
+            hideTip();
+            return;
+        }
+
+        var content = btn.getAttribute('data-tip-content') || '';
+        tipBodyEl.textContent = content;
+
+        if(!positionTipForButton(btn)){
+            hideTip();
+        }
+    }
+
+    window.toggleInfo = function(btnId) {
+        var current = getOpenTip();
+
+        if(current === btnId){
+            clearOpenTip();
+            hideTip();
+            return;
+        }
+
+        setOpenTip(btnId);
+        syncOpenTip();
+    };
+
+    function closeTooltipAnywhere(){
+        clearOpenTip();
+        hideTip();
+    }
+
+    document.addEventListener('click', function(e){
+        if(!e.target.closest('.risk-wrap') && !e.target.closest('#risk-tip') && !e.target.closest('#wrap')){
+            closeTooltipAnywhere();
+        }
+    }, true);
+
+    try {
+        window.top.document.addEventListener('click', function(e){
+            try {
+                var iframeEl = window.frameElement;
+                if (iframeEl && e.target === iframeEl) {
+                    return;
+                }
+            } catch(err) {}
+            closeTooltipAnywhere();
+        }, true);
+    } catch(e) {}
+
+    window.addEventListener('blur', function(){
+        closeTooltipAnywhere();
+    });
+
     function renderFromData() {
+        var openTip = getOpenTip();
         var raw = localStorage.getItem('ed_table_data');
         if(!raw) return;
         var rows = JSON.parse(raw);
@@ -931,18 +1265,21 @@ TABLE_HTML = """
         rows.forEach(function(r){
             var isOn = sel === r.pid;
             var bg = '#ffffff';
+            var tipId = 'tip-' + r.pid;
+
             if(r.status_short === 'Critical') bg = '#fce8e8';
             else if(r.status_short === 'High') bg = '#fff8cc';
             else if(r.status_short === 'Watch') bg = '#e6f2ff';
 
             html += '<tr style="background:'+bg+';">'
                 + '<td style="color:#555;">'+r.pid+'</td>'
-                + '<td style="font-weight:600;">'+r.name+'</td>'
+                + '<td style="font-weight:600;">'+esc(r.name)+'</td>'
+                + '<td>'+esc(r.gender)+'</td>'
                 + '<td>'+r.age+'</td>'
                 + '<td>'+r.triage+'</td>'
                 + '<td>'+r.location+'</td>'
                 + '<td style="font-weight:600;">'+(r.status_short === 'Critical' ? '🔴 Critical' : r.status_short === 'High' ? '🟠 High' : r.status_short === 'Watch' ? '🟡 Watch' : '🟢 Stable')+'</td>'
-                + '<td><strong>'+r.risk+'</strong></td>'
+                + '<td><div class="risk-wrap"><strong>'+r.risk+'</strong><button class="ib" data-tip-id="'+tipId+'" data-tip-content="'+esc(r.risk_info)+'" onclick="toggleInfo(\\''+tipId+'\\')" title="How risk score was derived" aria-label="Risk score details">i</button></div></td>'
                 + '<td>'+r.trend+'</td>'
                 + '<td>'+vit(r.vitals.spo2)+'</td>'
                 + '<td>'+vit(r.vitals.rr)+'</td>'
@@ -951,22 +1288,44 @@ TABLE_HTML = """
                 + '<td>'+vit(r.vitals.temp)+'</td>'
                 + '<td>'+vit(r.vitals.avpu)+'</td>'
                 + '<td>'+r.wait+'</td>'
-                + '<td>'+r.complaint+'</td>'
+                + '<td>'+r.trs+'</td>'
+                + '<td>'+esc(r.complaint)+'</td>'
                 + '<td style="text-align:center;"><button class="mb'+(isOn?' on':'')+'" onclick="toggleSel(\\''+r.pid+'\\')" title="Monitor Patient">🖥️</button></td>'
                 + '</tr>';
         });
 
         document.getElementById('tb').innerHTML = html;
+
+        requestAnimationFrame(function(){
+            if(openTip){
+                syncOpenTip();
+            } else {
+                hideTip();
+            }
+        });
     }
 
-    // Poll localStorage to update the table without iframe reload
-    setInterval(renderFromData, 500);
+    wrapEl.addEventListener('scroll', function(){
+        requestAnimationFrame(syncOpenTip);
+    });
+
+    window.addEventListener('resize', function(){
+        requestAnimationFrame(syncOpenTip);
+    });
+
+    window.addEventListener('scroll', function(){
+        requestAnimationFrame(syncOpenTip);
+    }, true);
+
+    setInterval(function(){
+        renderFromData();
+    }, 500);
+
     renderFromData();
 </script>
 """
 components.html(TABLE_HTML, height=530, scrolling=False)
 
-# STATIC MONITOR HTML
 MONITOR_HTML = """<!DOCTYPE html>
 <html>
 <head>
@@ -993,7 +1352,6 @@ padding: 3px 10px; background: #000;
 border-bottom: 1px solid #111; flex-shrink: 0; height: 22px;
 }
 .top-tag { font-size: 11px; font-weight: 700; letter-spacing: 1px; }
-
 .wave-row { flex: 1; position: relative; border-bottom: 1px solid #0d0d0d; min-height: 0; }
 .row-label {
 position: absolute; top: 4px; left: 8px; z-index: 2;
@@ -1044,26 +1402,11 @@ padding: 0 10px; flex-shrink: 0;
   <span class="top-tag" style="color:#aaa;" id="tb-info">—</span>
   <span class="top-tag" style="color:#ffc107;" id="tb-complaint">—</span>
 </div>
-<div class="wave-row">
-  <div class="row-label" style="color:#00ff41;">ECG</div>
-  <canvas class="wc" id="c-ecg"></canvas>
-</div>
-<div class="wave-row">
-  <div class="row-label" style="color:#ffff00;">RESP</div>
-  <canvas class="wc" id="c-resp"></canvas>
-</div>
-<div class="wave-row">
-  <div class="row-label" style="color:#00e5ff;">Pleth</div>
-  <canvas class="wc" id="c-pleth"></canvas>
-</div>
-<div class="wave-row">
-  <div class="row-label" style="color:#ff40ff;">CO2</div>
-  <canvas class="wc" id="c-co2"></canvas>
-</div>
-<div class="wave-row">
-  <div class="row-label" style="color:#ff4444;">CH1:Art</div>
-  <canvas class="wc" id="c-art"></canvas>
-</div>
+<div class="wave-row"><div class="row-label" style="color:#00ff41;">ECG</div><canvas class="wc" id="c-ecg"></canvas></div>
+<div class="wave-row"><div class="row-label" style="color:#ffff00;">RESP</div><canvas class="wc" id="c-resp"></canvas></div>
+<div class="wave-row"><div class="row-label" style="color:#00e5ff;">Pleth</div><canvas class="wc" id="c-pleth"></canvas></div>
+<div class="wave-row"><div class="row-label" style="color:#ff40ff;">CO2</div><canvas class="wc" id="c-co2"></canvas></div>
+<div class="wave-row"><div class="row-label" style="color:#ff4444;">CH1:Art</div><canvas class="wc" id="c-art"></canvas></div>
 </div>
 
 <div id="numerics">
@@ -1202,11 +1545,11 @@ const period = 60 / rr;
 const phase = (co2T % period) / period;
 const amp = etco2 / 50 * 0.9;
 let v = 0;
-if (phase < 0.08)      v = 0;               
-else if (phase < 0.20) v = amp * (phase-0.08)/0.12;  
-else if (phase < 0.52) v = amp * (1 + 0.06*Math.sin(Math.PI*(phase-0.20)/0.32)); 
-else if (phase < 0.60) v = amp * (1 - (phase-0.52)/0.08); 
-else                   v = 0;               
+if (phase < 0.08)      v = 0;
+else if (phase < 0.20) v = amp * (phase-0.08)/0.12;
+else if (phase < 0.52) v = amp * (1 + 0.06*Math.sin(Math.PI*(phase-0.20)/0.32));
+else if (phase < 0.60) v = amp * (1 - (phase-0.52)/0.08);
+else                   v = 0;
 return v + (Math.random()-0.5)*0.008;
 }
 
@@ -1292,7 +1635,6 @@ const artR   = new SweepRenderer('c-art',   '#ff4444', 0.55);
 let V = null, pid = null, animId = null, lastTs = null;
 let ecgLut = null, plethLut = null, artLut = null;
 let ecgPhase = 0, plethPhase = 0, artPhase = 0;
-let frameN = 0;
 
 function buildLuts(v) {
 ecgLut   = buildEcgLut(v.hr, v.avpu);
@@ -1339,7 +1681,6 @@ function frame(ts) {
 if (!lastTs) lastTs = ts;
 const dt = Math.min((ts - lastTs) / 1000, 0.05);
 lastTs = ts;
-frameN++;
 
 if (V) {
 const steps = Math.max(1, Math.round(SWEEP * dt));
@@ -1380,7 +1721,6 @@ function startMonitor(newPid, v) {
 const isSwitch = monitorsInitialized && (pid !== newPid);
 pid = newPid; V = v;
 buildLuts(v);
-frameN = 0;
 
 document.getElementById('no-selection').style.display = 'none';
 document.getElementById('monitor').style.display = 'flex';
@@ -1394,19 +1734,26 @@ const seed = pidSeed(newPid);
 if (!monitorsInitialized) {
 setTimeout(() => {
   [ecgR, respR, plethR, co2R, artR].forEach(r => r.init());
-  ecgPhase   = seed; plethPhase = (seed + 0.15) % 1; artPhase   = (seed + 0.05) % 1;
-  respT      = seed * 60; co2T       = (seed + 0.3) * 60;
+  ecgPhase   = seed;
+  plethPhase = (seed + 0.15) % 1;
+  artPhase   = (seed + 0.05) % 1;
+  respT      = seed * 60;
+  co2T       = (seed + 0.3) * 60;
   monitorsInitialized = true;
 }, 80);
 } else if (isSwitch) {
 [ecgR, respR, plethR, co2R, artR].forEach(r => r.flush());
-ecgPhase   = seed; plethPhase = (seed + 0.15) % 1; artPhase   = (seed + 0.05) % 1;
-respT      = seed * 60; co2T       = (seed + 0.3) * 60;
+ecgPhase   = seed;
+plethPhase = (seed + 0.15) % 1;
+artPhase   = (seed + 0.05) % 1;
+respT      = seed * 60;
+co2T       = (seed + 0.3) * 60;
 }
 }
 
 function stopMonitor() {
-V = null; pid = null;
+V = null;
+pid = null;
 document.getElementById('no-selection').style.display = 'flex';
 document.getElementById('monitor').style.display = 'none';
 }
